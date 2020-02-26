@@ -1,0 +1,8 @@
+xpanel("choose a simulation")
+  xlabel("Synaptic bombardment: choose a demo")
+  xbutton("Active coarse","load_file(\"demo_bombardment_active_coarse.oc\")")
+  xbutton("Active precise","load_file(\"demo_bombardment_active_precise.oc\")")
+  xbutton("Passive coarse","load_file(\"demo_bombardment_passive_coarse.oc\")")
+  xbutton("Passive precise","load_file(\"demo_bombardment_passve_precise.oc\")")
+  xbutton("Quit to start another simulation", "quit()")
+xpanel()
