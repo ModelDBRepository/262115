@@ -1,0 +1,640 @@
+//------------------------------------------------------------------------
+//
+//  Procedures to localize synapses in dendritic compartments
+//  =========================================================
+//
+//	Postsynaptic:
+//	  - all kinetics from:
+//	    Destexhe, A., Mainen, Z.F. and Sejnowski, T.J.  Kinetic models of 
+//	    synaptic transmission.  In: Methods in Neuronal Modeling (2nd ed) 
+//	    edited by Koch, C. and Segev, I.), MIT press, Cambridge, 1997.
+//	  - GABAa synapses everywhere (including init segment)
+//	  - AMPA synapses only in dendrites
+//	  - added NMDA colocalized with AMPA
+//
+//	Presynaptic:
+//	  - Stimulation using random generators
+//	  - Multigenerator mechanism
+//
+//	Procedures for assigning synaptic conductances:
+//	  - relative values from morphological data (density)
+//	  - localization mechanisms using SectionLists and path distance
+//
+//	Synaptic Coverage with constant density of synapses in the model
+//	  - defines a unit area for 1 synapse and add several synapses per 
+//	    compartment, according to the number of unit areas it contains.
+//	  - idem for GABA, leading to several synapses on soma.
+//
+//	Parameters that must be passed:
+//	  - cutoff : set the distance (um) that limit proximal region of 
+//		dendrites with no excitatory synapses (usually 40 um)
+//	  - ex_dend_unit: unit membrane area for excitatory synapses
+//	  - in_dend_unit: unit membrane area for inh synapses in dendrites
+//	  - in_soma_unit: unit membrane area for inh synapses in soma
+//	  - in_iseg_unit: unit membrane area for inh synapses in init seg
+//
+//	All surfaces calculated using area() procedure
+//	Treat AMPA and NMDA independently
+//
+//	Correlated Random Generators
+//	  - new variables: correlation of exc (corr_E) and inh (corr_I)
+//	  - adjustable seed
+//	  - corrGen8 generator (distributed generator)
+//
+//	Mechanisms to allow synaptic stimulation in addition to bombardment:
+//	  - store the distance of each compartment
+//
+//	multisynapse mechanisms (Lytton's algorithm)
+//
+//
+//  Alain Destexhe, Laval University 1997
+//
+//------------------------------------------------------------------------
+
+DEBUG = 0
+
+//------------------------------------------------------------------------
+//  Initializations
+//------------------------------------------------------------------------
+
+create PRE			// create presynaptic compartment
+PRE {
+  L = 0.1
+  diam = 0.1
+  insert pas			// (insert passive for compatibility)
+}
+
+a=0
+forall for(x) a=a+area(x)
+S_tot = a			// get total surface of cell
+
+a=0
+forsec "dend" for(x) a=a+area(x)
+S_dend = a			// get dendritic surface
+S_prox = S_tot - S_dend		// proximal surface
+
+printf("\nArea of cell:   prox=%g \t dend=%g \t tot=%g\n\n",S_prox,S_dend,S_tot)
+
+objectvar Prox, DendE, DendI		// section lists for proximal and dendrites
+Prox = new SectionList()
+DendE = new SectionList()
+DendI = new SectionList()
+
+max_dend_syn_E = 3 * int(0.5+S_dend/ex_dend_unit)
+max_dend_syn_I = 3 * int(0.5+S_dend/in_dend_unit)
+max_prox_syn_I = 3 * int(0.5+S_prox/in_soma_unit)
+
+double Prox_x[max_prox_syn_I]	// vectors to store index x
+double DendE_x[max_dend_syn_E]
+double DendI_x[max_dend_syn_I]
+
+double Prox_d[max_prox_syn_I]	// vectors to store distances
+double DendE_d[max_dend_syn_E]
+double DendI_d[max_dend_syn_I]
+
+double Prox_N[max_prox_syn_I]	// vectors to store the nb of synapses
+double DendE_N[max_dend_syn_E]
+double DendI_N[max_dend_syn_I]
+
+init()
+soma distance(0,0.5)		// init origin of path distance in mid-soma
+
+objectvar RND
+RND = new Random()
+
+
+
+//------------------------------------------------------------------------
+//  Build section lists, create synapses and generators
+//------------------------------------------------------------------------
+
+Soma_syn = 0
+Pdend_syn = 0
+Hill_syn = 0
+Iseg_syn = 0
+Prox_syn = 0
+Dend_syn_E = 0
+Dend_syn_I = 0
+
+print "\nCalculating synapse locations:"
+
+i=0
+j=0
+forsec "soma" {			// fill Prox sectionlist: begin by soma
+   x = 0.5
+   a=area(x)				// get area
+   nsyn = int(0.5+a/in_soma_unit) 		// get nb synapses
+   if(nsyn>0) {
+	Prox.append()			// add to list
+	Prox_x[i] = x			// store index
+	Prox_d[i] = 0			// store distance
+	Prox_N[i] = nsyn		// store nb of synapses
+	i=i+1
+	j=j+nsyn
+   }
+}
+Soma_syn = j
+print Soma_syn," synapses in soma"
+
+j=0
+forsec "dend" { 		// then proximal dendrites
+   for(x) if(x>0 && x<1) {		// scan each segment
+	a = area(x)
+	nsyn = int(0.5+a/in_dend_unit)
+	if(nsyn>0) {
+	   if(distance(x) < cutoff) {
+		Prox.append()		// add to list
+		Prox_x[i] = x		// store index
+		Prox_d[i] = distance(x) // store distance
+		Prox_N[i] = nsyn	// store nb of synapses
+		i=i+1
+		j=j+nsyn
+	   }
+        }
+   }
+}
+Pdend_syn = j
+print Pdend_syn," synapses in proximal dendrites"
+
+j=0
+forsec "hill" {			// axon hillock
+   for(x) if(x>0 && x<1) {		// scan each segment
+	a = area(x)
+	nsyn = int(0.5+a/in_soma_unit)
+	if(nsyn>0) {
+		Prox.append()		// add to list
+		Prox_x[i] = x		// store index
+		Prox_d[i] = distance(x) // store distance
+		Prox_N[i] = nsyn	// store nb of synapses
+		i=i+1
+		j=j+nsyn
+        }
+   }
+}
+Hill_syn = j
+print Hill_syn," synapses in axon hillock"
+
+j=0
+forsec "iseg" {			// initial segment
+   for(x) if(x>0 && x<1) {		// scan each segment
+	a = area(x)
+	nsyn = int(0.5+a/in_iseg_unit)
+	if(nsyn>0) {
+		Prox.append()		// add to list
+		Prox_x[i] = x		// store index
+		Prox_d[i] = distance(x) // store distance
+		Prox_N[i] = nsyn	// store nb of synapses
+		i=i+1
+		j=j+nsyn
+        }
+   }
+}
+Iseg_syn = j
+print Iseg_syn," synapses in axon initial segment"
+
+Prox_syn = Soma_syn + Pdend_syn + Hill_syn + Iseg_syn
+print "\nNumber of proximal synapses: ",Prox_syn
+
+
+
+
+i=0
+j=0
+forsec "dend" {			// Fill dendritic section lists (INH)
+   for(x) if(x>0 && x<1) {		// scan each segment
+	a = area(x)
+	nsyn = int(0.5+a/in_dend_unit)
+	if(nsyn>0) {
+	   if(distance(x) >= cutoff) {
+		DendI.append()		// add to list
+		DendI_x[i] = x		// store index
+		DendI_d[i] = distance(x) // store distance
+		DendI_N[i] = nsyn	// store nb of synapses
+		i=i+1
+		j=j+nsyn
+	   }
+        }
+   }
+}
+Dend_syn_I = j
+print "\nNumber of inhibitory dendritic synapses: ",Dend_syn_I
+
+
+
+
+i=0
+j=0
+forsec "dend" {			// Fill dendritic section list (EXC)
+   for(x) if(x>0 && x<1) {		// scan each segment
+	a = area(x)
+	nsyn = int(0.5+a/ex_dend_unit)
+	if(nsyn>0) {
+	   if(distance(x) >= cutoff) {
+		DendE.append()		// add to list
+		DendE_x[i] = x		// store index
+		DendE_d[i] = distance(x) // store distance
+		DendE_N[i] = nsyn	// store nb of synapses
+		i=i+1
+		j=j+nsyn
+	   }
+        }
+   }
+}
+Dend_syn_E = j
+print "\nNumber of excitatory dendritic synapses: ",Dend_syn_E
+
+
+
+
+
+
+
+//------------------------------------------------------------------------
+//  Create presynaptic generators
+//------------------------------------------------------------------------
+
+corr_E = 0			// correlation of excitatory synapses
+corr_I = 0			// correlation of inhibitory synapses
+
+objectvar proxGABAgen		// create inhibitory generator for prox
+PRE proxGABAgen = new corrGen8(0.5)
+proxGABAgen.N = Prox_syn
+proxGABAgen.correl = corr_I
+
+objectvar dendAMPAgen		// create excitatory generators for dendrites
+PRE dendAMPAgen = new corrGen8(0.5)
+dendAMPAgen.N = Dend_syn_E
+dendAMPAgen.correl = corr_E
+
+objectvar dendGABAgen		// create inhibitory generators for dendrites
+PRE dendGABAgen = new corrGen8(0.5)
+dendGABAgen.N = Dend_syn_I
+dendGABAgen.correl = corr_I
+
+pre_freq_E = 0.6		// mean presynaptic frequency - excitatory
+pre_freq_I = 0.1		// mean presynaptic frequency - inhibitory
+pre_dur = 10000			// duration of presynaptic firing
+
+dendAMPAgen.latency = 0		// initial latencies
+dendGABAgen.latency = 0
+proxGABAgen.latency = 0
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to redefine parameters of presynaptic generators
+//------------------------------------------------------------------------
+proc set_generators() {
+   dendAMPAgen.freq = pre_freq_E	// set presyn spike frequency
+   dendGABAgen.freq = pre_freq_I
+   proxGABAgen.freq = pre_freq_I
+
+   dendAMPAgen.correl = corr_E		// set correlations
+   dendGABAgen.correl = corr_I
+   proxGABAgen.correl = corr_I
+
+   dendAMPAgen.shutoff = dendAMPAgen.latency + pre_dur // set burst duration
+   dendGABAgen.shutoff = dendGABAgen.latency + pre_dur
+   proxGABAgen.shutoff = proxGABAgen.latency + pre_dur
+}
+
+set_generators()
+
+
+
+
+//------------------------------------------------------------------------
+//  Create objects for synapses
+//------------------------------------------------------------------------
+
+objectvar proxGABA[Prox_syn]	// create GABA synapses in proximal region
+
+objectvar dendAMPA[Dend_syn_E]	// create AMPA synapses in dendritic region
+objectvar dendNMDA[Dend_syn_E]	// create NMDA synapses in dendritic region
+objectvar dendGABA[Dend_syn_I]	// create GABA synapses in dendritic region
+
+
+forall { v = 100 } 		// to display
+
+
+
+//------------------------------------------------------------------------
+//  Procedures to insert inhibitory synapses
+//------------------------------------------------------------------------
+proc insert_GABA_prox() { local i
+   i = 0
+   j = 0
+   forsec Prox {		// scan proximal sections
+	proxGABA[i] = new multiGABAa()	// create GABAa synapse
+	proxGABA[i].loc(Prox_x[i])	// postsynaptic is present compartment
+	proxGABA[i].allocate(Prox_N[i])	// allocate for synapses
+	for k=0, Prox_N[i]-1 {		// scan each synapse
+	   proxGABA[i].addlink(&proxGABAgen.x[j])	// presyn is generator
+	   j = j + 1
+	}
+	Alpha_multiGABAa = 5		// kinetics (Destexhe et al., 1997)
+	Beta_multiGABAa = 0.18
+	Cmax_multiGABAa = 1
+	Cdur_multiGABAa = 1
+	Erev_multiGABAa = -80
+	i = i + 1
+	v = -80			// to display
+   }
+   print j," GABAa synapses inserted in proximal region"
+}
+
+proc insert_GABA_dend() { local i
+   i = 0
+   j = 0
+   forsec DendI {		// scan dendritic region
+	dendGABA[i] = new multiGABAa()	// create GABAa synapse
+	dendGABA[i].loc(DendI_x[i])	// postsynaptic is present compartment
+	dendGABA[i].allocate(DendI_N[i]) // allocate for synapses
+	for k=0, DendI_N[i]-1 {		// scan each synapse
+	   dendGABA[i].addlink(&dendGABAgen.x[j])	// presyn is generator
+	   j = j + 1
+	}
+	Alpha_multiGABAa = 5		// kinetics (Destexhe et al., 1997)
+	Beta_multiGABAa = 0.18
+	Cmax_multiGABAa = 1
+	Cdur_multiGABAa = 1
+	Erev_multiGABAa = -80
+	i = i + 1
+	v = -80			// to display
+   }
+   print j," GABAa synapses inserted in dendritic region"
+}
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to insert excitatory synapses in dendrites
+//------------------------------------------------------------------------
+proc insert_AMPA_dend() { local i
+   i = 0
+   j = 0
+   forsec DendE {		// scan dendritic region
+	dendAMPA[i] = new multiAMPA()	// create AMPA synapse
+	dendAMPA[i].loc(DendE_x[i])	// postsynaptic is present compartment
+	dendAMPA[i].allocate(DendE_N[i]) // allocate for synapses
+	for k=0, DendE_N[i]-1 {		// scan each synapse
+	   dendAMPA[i].addlink(&dendAMPAgen.x[j])	// presyn is generator
+	   j = j + 1
+	}
+	Alpha_multiAMPA = 1.1		// kinetics (Destexhe et al., 1997)
+	Beta_multiAMPA = 0.19
+	Cmax_multiAMPA = 1
+	Cdur_multiAMPA = 1
+	Erev_multiAMPA = 0
+	i = i + 1
+	v = -20			// to display
+   }
+   print j," AMPA synapses inserted in dendritic region"
+}
+
+proc insert_NMDA_dend() { local i
+   i = 0
+   j = 0
+   forsec DendE {		// scan dendritic region
+	dendNMDA[i] = new multiNMDA()	// create NMDA synapse
+	dendNMDA[i].loc(DendE_x[i])	// postsynaptic is present compartment
+	dendNMDA[i].allocate(DendE_N[i]) // allocate for synapses
+	for k=0, DendE_N[i]-1 {		// scan each synapse
+	   dendNMDA[i].addlink(&dendAMPAgen.x[j])	// presyn is generator
+	   j = j + 1
+	}
+	Alpha_multiNMDA = 0.072		// kinetics (Destexhe et al., 1997)
+	Beta_multiNMDA = 0.0066
+	Cmax_multiNMDA = 1
+	Cdur_multiNMDA = 1
+	Erev_multiNMDA = 0
+	mg_multiNMDA = 2			// ext Mg++
+	i = i + 1
+	v = -20			// to display
+   }
+   print j," NMDA synapses inserted in dendritic region"
+}
+
+
+
+
+strdef sn
+
+//------------------------------------------------------------------------
+//  Procedure to set synaptic conductances of AMPA synapses in dendrites
+//  arguments: 1=gAMPA (in S/cm2)
+//------------------------------------------------------------------------
+proc set_AMPA_dend() { local i,j,a
+
+   print "\nAMPA synapses in dendrites:\n"
+   print " Quantal conductance: ",$1," uS"
+
+   i = 0
+   j = 0
+   forsec DendE {
+	dendAMPA[i].gmax = $1		// AMPA conductance in dendrites
+	if(DEBUG>0) {
+	   sectionname(sn)
+	   printf("%s \t %g\n",sn,dendAMPA[i].gmax)
+	}
+	j = j + dendAMPA[i].nsyn
+	i = i + 1
+   }
+   printf("  %d synapses modified (%d multisynapses)\n",j,i)
+}
+
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to set synaptic conductances of NMDA synapses in dendrites
+//  arguments: 1=gNMDA (in S/cm2)
+//------------------------------------------------------------------------
+proc set_NMDA_dend() { local i,j,a
+
+   print "\nNMDA synapses in dendrites:\n"
+   print " Quantal conductance: ",$1," uS"
+
+   i = 0
+   j = 0
+   forsec DendE {
+	dendNMDA[i].gmax = $1		// NMDA conductance in dendrites
+	if(DEBUG>0) {
+	   sectionname(sn)
+	   printf("%s \t %g\n",sn,dendNMDA[i].gmax)
+	}
+	j = j + dendNMDA[i].nsyn
+	i = i + 1
+   }
+   printf("  %d synapses modified (%d multisynapses)\n",j,i)
+}
+
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to set synaptic conductances of inh synapses proximal
+//  arguments: 1=gGABA (in S/cm2) 
+//------------------------------------------------------------------------
+proc set_GABA_prox() { local i,j,a
+
+   print "\nGABAa synapses in proximal region:\n"
+   print " Quantal conductance: ",$1," uS"
+
+   i = 0
+   j = 0
+   forsec Prox {
+	proxGABA[i].gmax = $1		// GABA conductance in soma
+	if(DEBUG>0) {
+	   sectionname(sn)
+	   printf("%s \t %g\n",sn,proxGABA[i].gmax)
+	}
+	j = j + proxGABA[i].nsyn
+	i = i + 1
+   }
+   printf("  %d synapses modified (%d multisynapses)\n",j,i)
+}
+
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to set synaptic conductances of inh synapses in dendrites
+//  arguments: 1=gGABA (in S/cm2) 
+//------------------------------------------------------------------------
+proc set_GABA_dend() { local i,j,a
+
+   print "\nGABAa synapses in dendrites:\n"
+   print " Quantal conductance: ",$1," uS"
+
+   i = 0
+   j = 0
+   forsec DendI {
+	dendGABA[i].gmax = $1		// GABA conductance in dendrites
+	if(DEBUG>0) {
+	   sectionname(sn)
+	   printf("%s \t %g\n",sn,dendGABA[i].gmax)
+	}
+	j = j + dendGABA[i].nsyn
+	i = i + 1
+   }
+   printf("  %d synapses modified (%d multisynapses)\n",j,i)
+}
+
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to fire all excitatory synapses in dendrites
+//  located within a given distance
+//  arguments: 1=minimal distance, 2=maximal distance
+//------------------------------------------------------------------------
+proc fire_AMPA_dend() { local i,j,k,ns,sync
+
+   printf("\nAMPA synapses in dendrites between %g and %g um:\n", \
+	$1, $2)
+
+   i = 0		// counter for multisynapses
+   j = 0		// counter for synapses
+   ns = 0
+   forsec DendE {
+	sync = 0
+	if(DendE_d[i] >= $1 && DendE_d[i] <= $2) { 	// determine sync flag
+		sync = 1
+		ns = ns + DendE_N[i]			// add to counter
+	}
+	for k=0, DendE_N[i]-1 {				// set sync flag
+		dendAMPAgen.sync[j] = sync
+		j = j + 1
+	}
+	i = i + 1
+   }
+   dendAMPAgen.on = 3
+   printf(" %d synapses out of a total of %d armed for synch firing\n",ns,j)
+}
+
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to fire some excitatory synapses in dendrites
+//  located within a given distance
+//  arguments: 1=minimal distance, 2=maximal distance, 
+//	3=fraction of synapses stimulated [0-1] 
+//------------------------------------------------------------------------
+proc fire_some_AMPA() { local i,j,k,ns,sync,ii,nf
+
+   printf("\nAMPA synapses in dendrites between %g and %g um:\n", \
+	$1, $2)
+
+   nf = 1/$3
+   ii = 0		// counter for fraction
+
+   i = 0		// counter for multisynapses
+   j = 0		// counter for synapses
+   ns = 0
+   forsec DendE {
+	sync = 0
+	if(DendE_d[i] >= $1 && DendE_d[i] <= $2) { 	// determine sync flag
+	   ii = ii + 1
+	   if(ii >= nf) {
+		ii = 0
+		sync = 1
+		ns = ns + DendE_N[i]			// add to counter
+	   }
+	}
+	for k=0, DendE_N[i]-1 {				// set sync flag
+		dendAMPAgen.sync[j] = sync
+		j = j + 1
+	}
+	i = i + 1
+   }
+   dendAMPAgen.on = 3
+   printf(" %d synapses out of a total of %d armed for synch firing\n",ns,j)
+}
+
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to visualize the regions of synapses where firing is evoked
+//  arguments: 1=minimal distance, 2=maximal distance
+//------------------------------------------------------------------------
+proc show_AMPA_dend() { local i,a
+
+   printf("\nChanging the Vm of dendrites between %g and %g um\n\n", \
+	$1, $2)
+
+   i = 0
+   forsec DendE {
+	v = v_init
+	if(DendE_d[i] >= $1 && DendE_d[i] <= $2) {
+		v = 20
+	}
+        i = i + 1
+   }
+}
+
+
+
+
+//------------------------------------------------------------------------
+//  Procedure to set the seed of all random generators
+//  arguments:	1=seed for oc random, 2=seed for dendAMPA, 
+//		3=seed for dendGABA, 4=seed for dendGABA
+//------------------------------------------------------------------------
+proc set_seed() {
+   RND.ACG($1,7)
+   dendAMPAgen.new_seed($2)
+   dendGABAgen.new_seed($3)
+   proxGABAgen.new_seed($4)
+}
+

@@ -1,0 +1,197 @@
+//------------------------------------------------------------------------
+//
+//  Procedures to localize mechanisms in dendritic compartments
+//
+//  Simple version with minimal set of currents:
+//	- potassium currents: IKd Traub, IM Zach
+//	- INa current: Traub
+//	- IKd in dendrites
+//
+//  Procedures to localize currents as a function of distance
+//  (use the path distance function of NEURON)
+//
+//------------------------------------------------------------------------
+
+strdef sect
+
+soma distance(0,0.5)	// initialize path distances to center of soma
+
+//
+//  Procedures to insert mechanisms
+//
+proc insert_ina() {			// sodium channels
+	   insert inaT
+	   ena = 50
+	   vtraub_inaT = -63			// threshold of -55
+	   gnabar_inaT = 3			// zach init segment
+	   gnabar_inaT = 20e-4			// zach dendrites & soma
+}
+proc insert_ikd() {			// delayed-rectifier	
+	   insert ikdT
+	   ek = -90
+	   vtraub_ikdT = -63			// threshold of IKd
+	   gkbar_ikdT = 2000e-4			// zach init segment
+	   gkbar_ikdT = 200e-4			// zach soma
+}
+proc insert_im() {			// ca-dependent K+ current
+	   insert imZ
+	   ek = -90
+	   gkbar_imZ = 3e-4			// zach dendrites & soma
+}
+
+
+
+
+
+//
+//  Procedure to insert currents in soma, dendrites and axon
+//
+proc insert_currents() { 
+
+   forsec "dend" {	// dendrites
+	insert_ina()		// sodium channels
+	insert_im()		// M-channels
+	insert_ikd()		// delayed rectifier
+   }
+
+   soma {		// soma
+	insert_ina()		// sodium channels
+	insert_im()		// M-channels
+	insert_ikd()		// delayed rectifier
+   }
+
+   axon {		// axon
+	insert_ina()		// sodium channels
+	insert_ikd()		// delayed rectifier
+   }
+}
+
+
+
+//
+//  Procedure to set conductances in the soma
+//  arguments: 1=gNa, 2=gKd, 3=gM
+//
+proc set_soma() {
+
+   print " "
+   print "Set somatic currents:"
+   print " "
+   print " Sodium cnannels:  ",$1
+   print " IKd channels:     ",$2
+   print " IM channels:      ",$3
+   print " "
+
+   soma {
+	gnabar_inaT = $1	// sodium channels
+	gkbar_imZ = $3		// M-channels
+	gkbar_ikdT = $2		// delayed rectifier
+	if(DEBUG) {
+	   sectionname(sect)
+	   print "INa, IKd, IM inserted in ",sect
+	}
+   }
+}
+
+
+
+//
+//  Procedure to set conductances in the axon
+//  arguments: 1=gNa, 2=gKd
+//
+proc set_axon() {
+
+   print " "
+   print "Set axonal currents:"
+   print " "
+   print " Sodium cnannels:  ",$1
+   print " IKd channels:     ",$2
+   print " "
+
+   axon {
+	gnabar_inaT = $1	// sodium channels
+	gkbar_ikdT = $2		// delayed rectifier
+	if(DEBUG) {
+	   sectionname(sect)
+	   print "INa, IKd inserted in ",sect
+	}
+   }
+}
+
+
+
+
+//
+//  Procedure to set conductances in the dendrites
+//  arguments: 1=gNa, 2=gKd, 3=gM
+//
+proc set_dendrites() {
+
+   print " "
+   print "Set dendritic currents:"
+   print " "
+   print " Sodium cnannels:  ",$1
+   print " IKd channels:     ",$2
+   print " IM channels:      ",$3
+   print " "
+
+   forsec "dend" {
+	gnabar_inaT = $1	// sodium channels
+	gkbar_imZ = $3		// M-channels
+	gkbar_ikdT = $2		// delayed rectifier
+	if(DEBUG) {
+	   sectionname(sect)
+	   print "INa, IKd, IM inserted in ",sect
+	}
+   }
+
+   forsec "myelin" {
+	gnabar_inaT = $1	// sodium channels in myelin are idem dendrites
+	if(DEBUG) {
+	   sectionname(sect)
+	   print "INa inserted in ",sect
+	}
+   }
+}
+
+
+
+
+
+
+//
+//  Procedure to localize conductances in the dendrites
+//  arguments: 1=gNa, 2=gKd, 3=gM, 4=min distance, 5=max distance
+//
+proc localize_dendrites() {	local i
+
+   print " "
+   print "Localize dendritic currents:"
+   print " "
+   print " Sodium cnannels:  ",$1
+   print " IKd channels:     ",$2
+   print " IM channels:      ",$3
+   print " distance range: ",$4," to ",$5
+   print " "
+
+   i=0
+   forsec "dend" {
+     if( (distance(0.5) >= $4) && (distance(0.5) <= $5) ) {
+	gnabar_inaT = $1	// sodium channels
+	gkbar_imZ = $3		// M-channels
+	gkbar_ikdT = $2		// delayed rectifier
+	if(DEBUG) {
+	   sectionname(sect)
+	   print "INa, IKd, IM inserted in ",sect
+	}
+     }
+     i=i+1
+   }
+}
+
+
+
+
+
+
+

@@ -1,0 +1,562 @@
+/*----------------------------------------------------------------------------
+
+	CURRENT-CLAMP SIMULATIONS OF CORTICAL PYRAMIDAL CELLS
+	=====================================================
+
+	"coarse" simulation: about 2,000 synapses simulated
+	"active": voltage-dependent currents for action potentials
+
+	Morphology
+		- reconstructed Layer VI pyramidal cell from
+		  Contreras, Destexhe and Steriade, 1997
+		- correction for spines: 45% of dendritic membrane area
+		- simple axon
+
+	Passive properties
+		- passive parameters adjusted to recordings in the absence
+		  of synaptic activity (TTX + synaptic blockers)
+		- passive parameters adjusted by simplex fitting to both
+		  somatic and dendritic recordings
+		  (dendritic recording: cell x210x4, Rin of 154 Meg after NBQX)
+		=> Rin of 58.942 Meg in soma and 146 meg in dend1[12](0.179)
+		
+	Synaptic coverage:
+		- AMPA and NMDA synapses in dendrites only; GABAa everywhere
+		- 10times synapse coverage for exc synapses (17 um2)
+		- 10times synapse coverage for inh synapses (100 um2)
+		=> synapse densities consistent with morphological estimates
+		   (DeFelipe & Farinas, 1992; Larkman 1991)
+
+	Model adjusted to minis
+		- quantal conductance compatible with patch-clamp (Sakmann)
+		- uniform freq of release
+		- parameters estimated from histograms
+		=> gives minies with correct sigma and histograms
+
+	Synaptic bombardment in passive model:
+		- KCl: Erev_GABA = -55 mV; KAc: Erev_GABA = -75 mV
+		- adjust freq to get 80% Rin change (Ketamine-Xylazine)
+		- constrained by avg Vm under KCl (ECl=-55) and KAc (ECl=-75)
+
+	Correlated bombardment:
+		- correlated presynaptic random generator (corrGen8)
+
+	Optimized algorithm:
+		- multisynapse mechanisms in each segment
+		=> tremendous acceleration of computation time
+
+	Action potentials:
+		- Na+, K+ currents in soma, axon, dendrites
+		- shifted inactivation
+		- no high density in initial segment (only 10x in axon)
+		- conductances idem Dan Johnston 1997 Nature paper
+		- KAc conditions
+
+	=> this file simulates the synaptic bombardment in the presence of 
+           voltage-dependent currents
+
+        Details of the models can be found in:
+
+	Destexhe, A. and Pare D.  Impact of network activity on the integrative 
+	properties of neocortical pyramidal neurons in vivo. J. Neurophysiol.
+	81: 1531-1547, 1999.
+
+	A PDF copy of this paper is available in http://cns.iaf.cnrs-gif.fr
+
+
+	Alain Destexhe, destexhe@iaf.cnrs-gif.fr
+
+----------------------------------------------------------------------------*/
+
+
+
+//----------------------------------------------------------------------------
+//  load and define general graphical procedures
+//----------------------------------------------------------------------------
+
+load_file("nrngui.hoc")
+
+objectvar g[20]			// max 20 graphs
+ngraph = 0
+
+proc addgraph() { local ii	// define subroutine to add a new graph
+				// addgraph("variable", minvalue, maxvalue)
+	ngraph = ngraph+1
+	ii = ngraph-1
+	g[ii] = new Graph()
+	g[ii].size(tstart,tstop,$2,$3)
+	g[ii].xaxis()
+	g[ii].yaxis()
+	g[ii].addvar($s1,1,0)
+	g[ii].save_name("graphList[0].")
+	graphList[0].append(g[ii])
+}
+
+proc addshape() { local ii	// define subroutine to add a new shape
+				// addshape()
+	ngraph = ngraph+1
+	ii = ngraph-1
+	g[ii] = new PlotShape()
+	g[ii].scale(-130,50)
+}
+
+nrnmainmenu()			// create main menu
+nrncontrolmenu()		// create control menu
+
+
+
+
+//----------------------------------------------------------------------------
+//  transient time
+//----------------------------------------------------------------------------
+
+CURRINJ = 0		// amount of injected current - serves as flag
+
+if(CURRINJ == 0) {
+  trans = 150	// transient to reach steady state
+} else {
+  trans = 300	// transient to skip injected current
+}
+
+v_init = -65		// initial condition
+
+print " "
+print ">> Transient time of ",trans," ms"
+print " "
+
+
+DEBUG=0
+
+
+//----------------------------------------------------------------------------
+//  create multi-compartment geometry
+//----------------------------------------------------------------------------
+
+print " "
+print ">> Reading geometry of neuron..."
+print " "
+
+xopen("layer6.geo")		// Layer VI pyramidal cell
+
+corrD = 1.449		// dendritic correction for spines (44% of membrane)
+
+
+
+//----------------------------------------------------------------------------
+//  add a simple axon
+//----------------------------------------------------------------------------
+
+xopen("add_just_axon.oc")		// add simplified axon
+
+
+
+
+//----------------------------------------------------------------------------
+//  Passive currents
+//----------------------------------------------------------------------------
+
+// Best fit for TTX-bicuculline with Layer 6 cell, soma
+// fixed: rev=-65, cm=1, Ra=250, corrD=1.449
+// fit: g_pas=4.52e-5  (Error=5.0221802)
+
+leak_cond = 4.52e-5
+leak_rev = -65
+leak_rev = -70			// adjusted to cell x210x4
+leak_rev = -80			// fr3
+capacit = 1
+axial_res = 250
+
+forall { 			// insert passive current everywhere
+	insert pas
+	g_pas = leak_cond
+	e_pas = leak_rev
+	cm = capacit
+	Ra = axial_res
+	L = L
+}
+
+forsec "axon" {  		// exceptions along the axon
+	cm = 0.04
+	g_pas = 0.02
+}
+
+forsec "dend" { 		// correction for dendrites
+	g_pas = g_pas * corrD
+	cm = cm * corrD
+}
+
+
+
+
+//----------------------------------------------------------------------------
+//  localize dendritic currents
+//----------------------------------------------------------------------------
+
+xopen("localize_currents_M.oc")	// get procedures to insert mechanisms
+
+insert_currents()	// insert mechanisms in the neuron (**)
+				// - dendrites: INa, ICa, IKCa, IM, ca++, IKd
+				// - soma: idem dendrites
+				// - axon: INa, IKd
+
+//
+// Na channels like Magee-Johnston
+// IM set to repetitive firing at the right frequency
+//
+
+corrJ = 4.3	// Johnston correction factor for Na conductance
+
+set_dendrites(corrD*corrJ*120e-4, corrD*100e-4, corrD*5e-4)
+set_soma(corrJ*120e-4, 100e-4, 5e-4)
+set_axon(corrJ*1200e-4, 1000e-4)		// 10-times more in axon
+
+
+forall { 
+  shift_inaT = -10		// inactivation around -52 mV
+  vtraub_inaT = -58		// to get threshold at -55 mV
+  vtraub_ikdT = -58
+}
+
+
+
+//objref counter
+//soma counter = new APC(0.5)	// counter for action potentials
+
+
+
+
+//----------------------------------------------------------------------------
+//  localize synapses
+//----------------------------------------------------------------------------
+
+// Nov 27, 1997: recalculated densities to make them compatible with the 
+// proportion of synapses found in pyramidal cells
+
+cutoff = 40		// cutoff distance (um) where spines begin
+ex_dend_unit =  17	// unit membrane area for excitatory synapses
+in_dend_unit =  100	// unit membrane area for inh synapses in dendrites
+in_soma_unit =  25	// unit membrane area for inh synapses in soma
+in_iseg_unit =  17	// unit membrane area for inh synapses in init seg
+
+//  With 100,100,25,17 um2 (exc dend, inh dend, inh soma, inh iseg), one
+//  excitatory synapse represents 55-65 real synapses and one inhibitory
+//  synapse represents 8.8-10.4 real synapses... (ratio of 6.25)
+//  (according to high spine density; and 7% GABAergic in soma)
+
+
+xopen("localize_synapses_corrgen_mul.oc")   // procedures and initializations
+
+SEED = 1				  // flag for seed
+if(SEED) set_seed(0.1,0.2,0.3,0.4)	  // set seed for random numbers
+
+
+EXC = 1		// flag variable to insert excitatory synapses
+NMDA = 0	// flag variable for NMDA
+INH = 1		// flag variable to insert inhibitory synapses
+
+if(INH) {
+  insert_GABA_prox()	// insert GABAa synapses in soma, prox dend & axon
+  insert_GABA_dend()	// insert GABAa synapses in dendrites
+}
+
+if(EXC) { 
+  insert_AMPA_dend()	// insert AMPA synapses in dendrites
+  if(NMDA) {
+     insert_NMDA_dend()	// insert NMDA synapses in dendrites
+  }
+}
+
+
+
+//
+//  Presynaptic parameters
+//
+pre_freq_I = 55 	// inh presynaptic frequency
+pre_freq_E = 10 	// exc presynaptic frequency 
+			// (if inh is 0.1, exc should be 0.625)
+pre_dur = 1e6		// duration of presynaptic firing
+
+corr_E = 0.7	  	// exc correlation
+corr_I = 0.7	  	// inh correlation
+
+set_generators()
+
+
+
+//
+// KINETICS
+//
+
+Erev_multiGABAa = -55	// chloride (from Denis)
+Erev_multiGABAa = -75	// K-Ac
+
+//Cdur_multiGABAa = 0.3
+//Alpha_multiGABAa = 20
+//Beta_multiGABAa = 0.05	// from SimFit to Denis recordings
+//Beta_multiGABAa = 0.18	// SimFit to hippocampal GABAa
+
+Cdur_multiGABAa = 1	// idem Meth Neuronal Modeling
+Cmax_multiGABAa = 1	// idem Meth Neuronal Modeling
+Alpha_multiGABAa = 5	// idem Meth Neuronal Modeling
+Beta_multiGABAa = 0.1	// fr3
+
+//Cdur_multiAMPA = 0.3
+//Alpha_multiAMPA = 5
+//Alpha_multiAMPA = 20	// better (higher amplitude)
+//Beta_multiAMPA = 0.243	// from SimFit to Denis recordings
+
+Cdur_multiAMPA = 1		// idem Meth Neuronal Modeling
+Cmax_multiAMPA = 1		// idem Meth Neuronal Modeling
+Alpha_multiAMPA = 1.1	// idem Meth Neuronal Modeling
+Beta_multiAMPA = 0.67	// fast AMPA to get a decay of 1.5 ms (Markram)
+
+
+
+//
+// QUANTAL CONDUCTANCES
+//
+
+g_AMPA = 0.001200	// quantal AMPA conductance (Denis is 0.000260)
+g_GABA = 0.000600	// quantal GABA conductance (consistent with in vitro)
+ 
+// By comparison, Sakmann is 200-400 nS for GABA, AMPA is 0.35-1 nS (McBain
+// and Dingledine, 1992; Burgard and Hablitz, 1993)
+
+if(EXC) {
+  if(NMDA) {
+     g_NMDA = 4 * g_AMPA
+  } else {
+     g_NMDA = 0
+  }
+} else {
+  g_AMPA = 0
+  g_NMDA = 0
+}
+
+if(INH) { 
+  		// do nothing
+} else {
+  g_GABA = 0
+}
+
+
+
+
+
+
+proc stim_uniform() {
+  set_generators()
+  if(EXC) {
+     set_AMPA_dend(g_AMPA*corrD)	// dendritic AMPA conductances
+     if(NMDA) {
+	set_NMDA_dend(g_NMDA*corrD)	// dendritic NMDA conductances
+     } 
+  }
+  if(INH) {
+     set_GABA_prox(g_GABA)		// perisomatic GABA conductances
+     set_GABA_dend(g_GABA*corrD)	// dendritic GABA conductances
+  }
+  printf("\nSetting generators and synaptic conductances:\n")
+  printf(" Exc f = %g Hz\n Inh f = %g Hz\n",pre_freq_E,pre_freq_I)
+  printf(" gAMPA = %g uS\n gNMDA = %g uS\n gGABA = %g uS\n", \
+	g_AMPA,g_NMDA,g_GABA)
+}
+
+stim_uniform()
+
+
+
+
+//----------------------------------------------------------------------------
+//  insert electrode in dendrite or soma
+//----------------------------------------------------------------------------
+
+xopen("Electrode.oc")		// template for electrode
+
+access soma
+//access dend1[12]
+
+objectvar El		// create electrode
+
+El = new Electrode(0.5)
+
+soma El.stim.loc(0.5)		// locate in soma
+//dend1[12] El.stim.loc(0.179)	// locate in dendrite
+El.stim.del = 0
+El.stim.dur = 1e6
+El.stim.amp = 0
+
+
+
+objectvar dc		// create DC-current
+
+dc = new Electrode(0.5)
+
+soma dc.stim.loc(0.5)		// locate in soma
+//dend1[12] dc.stim.loc(0.179)	// locate in dendrite
+dc.stim.del = 0
+dc.stim.dur = 1e6
+dc.stim.amp = 0
+
+
+
+
+
+//----------------------------------------------------------------------------
+//  setup simulation parameters
+//----------------------------------------------------------------------------
+
+Dt = 0.1
+npoints = 10000	// 600000
+
+objectvar SIMsoma,SIMdend		// create vectors of simulation points
+SIMsoma = new Vector(npoints+500)
+SIMdend = new Vector(npoints+500)
+
+dt = 0.1			// must be submultiple of Dt
+tstart = 0
+tstop = npoints * Dt
+runStopAt = tstop
+steps_per_ms = 1/Dt
+celsius = 36
+
+statpts = npoints+1-trans/Dt	// nb of points to analyze
+
+objectvar Vsoma, Vdend		// create vectors for histogram analysis
+Vsoma = new Vector(statpts)
+Vdend = new Vector(statpts)
+
+
+
+
+
+//----------------------------------------------------------------------------
+//  Define histogram procedures
+//----------------------------------------------------------------------------
+
+nbins = 100			// nb of points in histogram
+vmin = -80			// min value of Vm
+vmax = 0			// max value of Vm
+hmax = 20000			// max value of histogram
+binsize = (vmax-vmin)/nbins	// size of bin
+
+objectvar Hsoma,Hdend		// create vectors for histograms
+Hsoma = new Vector(nbins)
+Hdend = new Vector(nbins)
+objectvar HX
+HX = new Vector(nbins)		// Vector for histogram's absissa
+x = vmin
+for i=0, nbins-1 {
+	HX.set(i,x)
+	x = x + binsize
+}
+
+hgr = ngraph
+g[hgr] = new Graph()		// graph for histogram
+g[hgr].size(vmin,vmax,0,hmax)
+g[hgr].xaxis()
+g[hgr].yaxis()
+g[hgr].save_name("graphList[0].")
+graphList[0].append(g[hgr])
+ngraph = ngraph + 1
+
+proc init() {				// initialization procedure
+	finitialize(v_init)
+	fcurrent()
+	index = 0			// add definition of an index
+}
+
+
+proc step() {local i			// advance-one-step (Dt) procedure
+	Plot()
+	SIMsoma.set(index,soma.v(0.5))		// memorize data
+	SIMdend.set(index,dend1[12].v(0.179))	// memorize data
+	index = index + 1
+	for i=1,nstep_steprun {
+		advance()
+	}
+}
+
+//
+//  calculate sigma from histogram (skipping spikes)
+//
+proc calc_sigma() { local sum,avg,sig
+   x = vmin
+   for i=0, nbins-1 {
+	if(x <= $1) {
+		y = Hsoma.get(i)
+		sum = sum + y
+		avg = avg + y * x
+		sig = sig + y * x*x
+	}		
+	x = x + binsize
+   }
+   avg = avg / sum
+   sig = sqrt(sig/sum - avg*avg)
+   printf("\n=> Values computed by cutting spikes: avg=%g, sigma=%g\n\n",avg,sig)
+}
+
+niter = 1
+Rin = 0
+
+proc run_histo() {
+   for i=0, niter-1 {
+	if(SEED) set_seed(0.1,0.2,0.3,0.4)		// set seed
+	run()						// run simulation
+
+	Vsoma.copy(SIMsoma,trans/Dt,npoints-1)		// truncate data
+	Hsoma = Vsoma.histogram(vmin,vmax,binsize)	// make histogram
+	Hsoma.plot(g[hgr],HX)				// draw histogram
+	Avg = SIMsoma.mean(trans/Dt,npoints-1)		// calc statistics
+	Std = SIMsoma.stdev(trans/Dt,npoints-1)
+	if(CURRINJ != 0) {
+	 Rin=-(SIMsoma.mean(320/Dt,400/Dt)-SIMsoma.mean(120/Dt,200/Dt))/CURRINJ
+	}
+	printf("\nSoma:\tRin=%g\tAvg=%g\tStd=%g\n",Rin,Avg,Std)
+	calc_sigma(-40)
+
+	Vdend.copy(SIMdend,trans/Dt,npoints-1)		// truncate data
+	Hdend = Vdend.histogram(vmin,vmax,binsize)	// make histogram
+	Hdend.plot(g[hgr],HX)				// draw histogram
+	Avg = SIMdend.mean(trans/Dt,npoints-1)		// calc statistics
+	Std = SIMdend.stdev(trans/Dt,npoints-1)
+	if(CURRINJ != 0) {
+	 Rin=-(SIMsoma.mean(320/Dt,400/Dt)-SIMsoma.mean(120/Dt,200/Dt))/CURRINJ
+	}
+	printf("dend:\tRin=%g\tAvg=%g\tStd=%g\n",Rin,Avg,Std)
+   }
+}
+
+
+
+proc make_SBpanel() {			// make panel
+	xpanel("Syn Bombardment")
+	xpvalue("g_AMPA",&g_AMPA)
+	xpvalue("g_NMDA",&g_NMDA)
+	xpvalue("g_GABA",&g_GABA)
+	xpvalue("Exc freq",&pre_freq_E)
+	xpvalue("Inh freq",&pre_freq_I)
+	xpvalue("Exc correlation",&corr_E)
+	xpvalue("Inh correlation",&corr_I)
+	xpvalue("Cl reversal",&Erev_multiGABAa)
+	xpvalue("AMPA decay",&Beta_multiAMPA)
+	xpvalue("GABA decay",&Beta_multiGABAa)
+	xbutton("Apply","stim_uniform()")
+	xbutton("Set seed","set_seed(0.1,0.2,0.3,0.4)")
+	xpvalue("Nb iterations",&niter)
+	xbutton("Run + calc histogram","run_histo()")
+	xpanel()
+}
+
+make_SBpanel()
+
+
+
+
+//----------------------------------------------------------------------------
+//  add graphs
+//----------------------------------------------------------------------------
+
+addgraph("soma.v(0.5)",vmin,vmax)		// soma
+addgraph("dend1[12].v(0.179)",vmin,vmax)
+

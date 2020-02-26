@@ -1,0 +1,31 @@
+//
+//  Procedures to add a simplified axon directly to the soma
+//  (no axon hillock, no initial segment, no nodes of ranvier)
+//
+//  A. Destexhe, Laval University, 1996
+//
+
+  // initial segment
+  // Farinas & DeFelipe J Comp Neurol 1991: 
+  //                L                 diam
+  // cocallosal     21.6 +- 4.10      1.06 +- 0.18
+  // ispsilateral   22.24 +- 1.58     1.06 +- 0.12
+
+
+
+print " "
+print "Adding axon ..."
+print " "
+
+
+create axon		// create axon
+
+soma connect axon (0), 0.5	// connect them
+
+
+axon { 				// axon
+	nseg = 10
+	L = 1000
+	diam = 0.5
+}
+
