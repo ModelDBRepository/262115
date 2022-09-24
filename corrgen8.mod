@@ -91,7 +91,6 @@ NEURON	{
 	RANGE on, latency, shutoff
 	RANGE x, ns, ls, sync
 	RANGE spont, prob, N2
-	RANGE new_seed, printvec
 }
 
 UNITS {
